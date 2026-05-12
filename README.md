@@ -13,7 +13,9 @@
 一号一绑则无需注册whatsapp，直接注册gopay或者gojek，订阅过程中输入sms验证码即可。 
 一号多绑，则可在虚拟手机号期限内，注册gopay，gojek后多次接码 多次绑定即可，也可注册whatsapp，封号风险较大
 
-作者未尝试过sms api接码和批量接码，但是原理一致，都是可行的，需要用户自己改造smsapi接码的部分，仅提供了参考。
+
+gopay、gojek账号仍然需要用户自己注册，否则一切免谈，自动化仍然如此，自动化注册gopay，gojek难度过大，无法进行，本项目仅提供gopay自动化注册思路和方法。
+作者未尝试过sms api接码和批量接码，但是原理一致，都是可行的，需要用户自己改造smsapi接码的部分，仍然仅提供了参考。
 
 本项目为免费开源，收费售卖者死冯，有问题请联系邮箱links-to@outlook.com 作者不负责任何用户的行为，该项目仅供学习交流。
 项目地址https://github.com/ywnd1144/Gopay_plus_automatic
