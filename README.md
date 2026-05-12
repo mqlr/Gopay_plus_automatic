@@ -1,4 +1,6 @@
 ﻿# GoPay Plus 自动订阅机
+[![GitHub](https://img.shields.io/badge/GitHub-Gopay__plus__automatic-blue?logo=github)](https://github.com/ywnd1144/Gopay_plus_automatic)
+[![Stars](https://img.shields.io/github/stars/ywnd1144/Gopay_plus_automatic?style=social)](https://github.com/ywnd1144/Gopay_plus_automatic)
 
 全自动 ChatGPT Plus 订阅工具。
 
