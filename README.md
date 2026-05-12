@@ -40,7 +40,7 @@
 | SOCKS5 代理 | 日本/东南亚出口 IP | 自建或购买 |
 | GoPay 账号 | 印尼手机号 + 6 位 PIN | 用印尼虚拟号注册 Gojek |
 | ChatGPT access_token | 要订阅的账号的凭证 | 见下方获取方法 |
-gopay使用必须开启pin，否则将无法支付。
+  gopay使用必须开启pin，否则将无法支付。
 
 ### 如何获取 access_token
 
@@ -554,7 +554,7 @@ journalctl -u gopay-orchestrator -f
 ### Q: 代理有什么要求？
 
 - 必须是 SOCKS5 协议
-- 出口 IP 必须是日本或东南亚（印尼最佳）
+- 出口 IP 必须是日本 才有plus订阅
 - 不能是被 GoPay/Midtrans 封禁的 IP
 - 推荐自建代理或使用住宅代理
 
