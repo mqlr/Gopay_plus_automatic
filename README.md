@@ -449,7 +449,7 @@ node index.js
 
 配对成功后，服务会持续运行，自动接收验证码。
 
-已知问题：WhatsApp 可能对金融类消息（如 GoPay 验证码）做屏蔽处理（MASK_LINKED_DEVICES），导致关联设备收不到。如果遇到这个问题，请改用 manual 或 sms_api 模式。
+已知问题：WhatsApp的连结设备（非主设备）可能对金融类消息（如 GoPay 验证码）做屏蔽处理（MASK_LINKED_DEVICES），导致关联设备收不到。如果遇到这个问题，请改用 manual 或 sms_api 模式。
 
 ---
 
