@@ -144,6 +144,13 @@ class GoPayCharger:
         self.midtrans_client_id = str(
             gopay_cfg.get("midtrans_client_id") or DEFAULT_MIDTRANS_CLIENT_ID
         )
+        # OTP 通道：whatsapp（默认）| sms
+        # 选 sms 时：consent 先发 WhatsApp（GoPay 默认），等 sms_switch_countdown_sec 秒
+        #           后调 sms_switch_endpoint 切换为 SMS；然后脚本会等接码平台拿 SMS OTP。
+        self.otp_channel = str(gopay_cfg.get("otp_channel") or "whatsapp").lower()
+        self.sms_switch_countdown_sec = int(gopay_cfg.get("sms_switch_countdown_sec") or 30)
+        self.sms_switch_endpoint = str(gopay_cfg.get("sms_switch_endpoint") or "")
+        self.sms_switch_body_extra = dict(gopay_cfg.get("sms_switch_body_extra") or {})
         self.otp_provider = otp_provider
         self.log = log
         self._midtrans_merchant_id: Optional[str] = None
@@ -676,6 +683,46 @@ class GoPayCharger:
         if not r.json().get("success"):
             raise GoPayError(f"user-consent failed: {r.text[:300]}")
         self.log("[gopay] consent ok, OTP sent via WhatsApp")
+        # 如果用户选了 SMS 通道，走"等倒计时 + 切短信"流程
+        if self.otp_channel == "sms":
+            self._gopay_switch_to_sms(reference_id)
+
+    def _gopay_switch_to_sms(self, reference_id: str):
+        """把 OTP 发送通道从 WhatsApp 切到 SMS。
+
+        GoPay web 行为：user-consent 后默认发 WhatsApp，用户必须等按钮倒计时
+        （实测约 30 秒）结束才能点击"改用短信接收"。该按钮实际发送一个 HTTP 请求
+        触发 SMS 重发。endpoint / body 可由 gopay_cfg.sms_switch_endpoint / 
+        sms_switch_body_extra 覆盖（用户抓 HAR 后填入）。
+
+        内置默认（基于 GoPay 路由模式推断，未保证永久有效）：
+            POST https://gwa.gopayapi.com/v1/linking/user-consent
+            body: {"reference_id": ..., "otp_channel": "sms"}
+        """
+        if self.sms_switch_countdown_sec > 0:
+            self.log(f"[gopay] waiting {self.sms_switch_countdown_sec}s countdown before switching to SMS")
+            time.sleep(self.sms_switch_countdown_sec)
+
+        url = self.sms_switch_endpoint or "https://gwa.gopayapi.com/v1/linking/user-consent"
+        body = {"reference_id": reference_id, "otp_channel": "sms"}
+        body.update(self.sms_switch_body_extra)
+        try:
+            r = self.ext.post(
+                url,
+                json=body,
+                headers=self._gopay_headers(locale=self.browser_locale),
+                timeout=DEFAULT_TIMEOUT,
+            )
+            if r.status_code >= 400:
+                self.log(
+                    f"[gopay] SMS switch got http {r.status_code}: {r.text[:200]}; "
+                    "配置 gopay_cfg.sms_switch_endpoint 覆盖默认 URL（抓 HAR 得到准确值）"
+                )
+                # 不 raise — WhatsApp OTP 仍然有效；SMS 接码平台也可能正常拿到号
+                return
+            self.log("[gopay] switched OTP delivery to SMS")
+        except Exception as e:
+            self.log(f"[gopay] SMS switch request failed: {e}（WhatsApp OTP 仍然有效）")
 
     def _gopay_validate_otp(self, reference_id: str, otp: str) -> tuple[str, str]:
         """Returns (challenge_id, client_id) for PIN tokenization."""
@@ -735,6 +782,15 @@ class GoPayCharger:
             headers=headers,
             timeout=DEFAULT_TIMEOUT,
         )
+        if r.status_code == 429:
+            # GoPay PIN 限流（同号/同设备短时间内尝试过多）
+            # 响应体里包含 cool_down_period（秒），通常 3600
+            try:
+                err_data = r.json()
+                cool_down = err_data.get("data", {}).get("meta", {}).get("cool_down_period", 3600)
+                raise GoPayError(f"PIN rate-limited: too many attempts, cool down {cool_down}s")
+            except (ValueError, KeyError):
+                raise GoPayError(f"PIN rate-limited (429): {r.text[:200]}")
         if r.status_code in (400, 401, 403):
             raise GoPayPINRejected(f"PIN rejected: {r.text[:200]}")
         r.raise_for_status()
@@ -777,11 +833,44 @@ class GoPayCharger:
         )
         r.raise_for_status()
         data = r.json()
-        link = data.get("gopay_verification_link_url", "")
+        # 打印 charge 响应 keys（不打 values，避免泄露 token）便于定位未知响应结构
+        try:
+            self.log(f"[gopay] charge response keys={sorted(data.keys())[:20]}")
+        except Exception:
+            pass
+        # Midtrans charge reference 可能在多处，逐一尝试以抵御响应格式变更
+        # 优先级：
+        #   1) gopay_verification_link_url 里的 reference= 查询参数（最稳的签名）
+        #   2) redirect_url 里的 reference= / reference_
+        #   3) finish_redirect_url 里的 reference= / reference_
+        #   4) 全响应文本里扫描 A1… 开头的 GoPay charge ref（这是 GoPay 用于后续
+        #      /payment/validate 的 charge_ref 真身，比 transaction_id(UUID) 可靠）
+        #   5) 最后才 fallback 到 transaction_id（某些老响应里是这个）
+        link = data.get("gopay_verification_link_url", "") or ""
+        charge_ref = ""
         m = re.search(r"reference=([A-Za-z0-9]+)", link)
-        if not m:
-            raise GoPayError(f"midtrans charge: no reference in {link!r}")
-        charge_ref = m.group(1)
+        if m:
+            charge_ref = m.group(1)
+        if not charge_ref:
+            redirect = data.get("redirect_url", "") or ""
+            m2 = re.search(r"reference[_=]([A-Za-z0-9]+)", redirect)
+            if m2:
+                charge_ref = m2.group(1)
+        if not charge_ref:
+            finish = data.get("finish_redirect_url", "") or data.get("finish_200_redirect_url", "") or ""
+            m2b = re.search(r"reference[_=]([A-Za-z0-9]+)", finish)
+            if m2b:
+                charge_ref = m2b.group(1)
+        if not charge_ref:
+            # GoPay charge reference pattern: A1 开头 + 18 位十六进制/数字字符（实测格式）
+            m3 = re.search(r"\b(A1[A-Za-z0-9]{18,})\b", str(data))
+            if m3:
+                charge_ref = m3.group(1)
+        if not charge_ref:
+            # 最后 fallback；transaction_id 对 /payment/validate 无效，但总比崩强
+            charge_ref = data.get("transaction_id", "") or data.get("order_id", "") or ""
+        if not charge_ref:
+            raise GoPayError(f"midtrans charge: no reference found in response: {str(data)[:500]}")
         self.log(f"[gopay] midtrans charge ref={charge_ref}")
         return charge_ref
 
@@ -1491,9 +1580,9 @@ def _build_chatgpt_session(auth_cfg: dict) -> Any:
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
     )
 
-    if not (session_token or cookie_header):
+    if not (session_token or cookie_header or access_token):
         raise GoPayError(
-            "auth missing: need session_token or cookie_header in config",
+            "auth missing: need session_token, cookie_header, or access_token in config",
         )
 
     s = _new_session()

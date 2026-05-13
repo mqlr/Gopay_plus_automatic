@@ -137,9 +137,19 @@ class PaymentService(payment_pb2_grpc.PaymentServiceServicer):
             cfg = copy.deepcopy(self._cfg)
             fresh_checkout = cfg.get("fresh_checkout") or {}
             auth_cfg = dict(fresh_checkout.get("auth") or {})
-            auth_cfg["session_token"] = request.session_token.strip()
-            auth_cfg.pop("cookie_header", None)
-            auth_cfg.pop("access_token", None)
+
+            # 检测传入的是 JWT access_token 还是 session_token
+            _token = request.session_token.strip()
+            if _token.startswith("eyJ") and _token.count(".") == 2:
+                # JWT access_token：直接用作 Bearer，不需要 session_token cookie
+                auth_cfg["access_token"] = _token
+                auth_cfg.pop("session_token", None)
+                auth_cfg.pop("cookie_header", None)
+            else:
+                # session_token cookie
+                auth_cfg["session_token"] = _token
+                auth_cfg.pop("cookie_header", None)
+                auth_cfg.pop("access_token", None)
 
             cs_session = _build_chatgpt_session(auth_cfg)
 
